@@ -9,13 +9,14 @@ class MergeToolApp:
         self.root.title(".xy / .out 개별 설정 병합기")
         self.root.geometry("700x900")
 
-        self.folder_list = []
+        self.files_by_ext = {".xy": [], ".out": []}
+        self.file_settings = {".xy": {}, ".out": {}}
         self.target_file = None
 
-        # --- 1. 폴더 관리 영역 ---
+        # --- 1. 파일 관리 영역 ---
         folder_frame = tk.LabelFrame(
             root,
-            text="1. 폴더 목록 (맨 위 폴더가 X축 기준)",
+            text="1. 파일 목록 (맨 위 파일이 X축 기준)",
             font=("맑은 고딕", 10, "bold"),
         )
         folder_frame.pack(pady=5, padx=10, fill=tk.X)
@@ -33,15 +34,9 @@ class MergeToolApp:
         btn_frame = tk.Frame(folder_frame)
         btn_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        tk.Button(btn_frame, text="📂 폴더 추가", command=self.add_folder).pack(
+        tk.Button(btn_frame, text="📄 파일 추가", command=self.add_files).pack(
             side=tk.LEFT, padx=2
         )
-        tk.Button(
-            btn_frame,
-            text="📂 하위폴더 몽땅 추가",
-            command=self.add_subfolders,
-            bg="#fff5cc",
-        ).pack(side=tk.LEFT, padx=2)
         tk.Button(btn_frame, text="삭제", command=self.delete_selected).pack(
             side=tk.LEFT, padx=2
         )
@@ -80,6 +75,7 @@ class MergeToolApp:
 
         # 탭 변경 이벤트 바인딩 (탭 바뀔 때마다 미리보기 자동 갱신)
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_change)
+        self.listbox.bind("<<ListboxSelect>>", self.on_file_select)
 
         # --- 3. 미리보기 창 (공통) ---
         preview_frame = tk.LabelFrame(root, text="3. 파일 내용 미리보기", font=("맑은 고딕", 9))
@@ -129,7 +125,7 @@ class MergeToolApp:
             row_frame,
             text="이 행 기준으로 컬럼 분석 ⟳",
             bg="#e6e6fa",
-            command=lambda: self.update_columns(ext_name, spin_row, combo_x, combo_y),
+            command=lambda: self.update_columns(ext_name),
         )
         btn_update.pack(side=tk.LEFT)
 
@@ -141,15 +137,55 @@ class MergeToolApp:
         combo_x = ttk.Combobox(col_frame, state="readonly", width=40)
         combo_x.grid(row=0, column=1, padx=5, pady=5)
 
-        tk.Label(col_frame, text="Y축 병합 열:").grid(row=1, column=0, sticky="e", padx=5)
+        tk.Label(col_frame, text="Y축 병합 열(추가):").grid(
+            row=1, column=0, sticky="e", padx=5
+        )
         combo_y = ttk.Combobox(col_frame, state="readonly", width=40)
         combo_y.grid(row=1, column=1, padx=5, pady=5)
+        tk.Button(
+            col_frame,
+            text="추가",
+            command=lambda: self.add_y_column(ext_name),
+        ).grid(row=1, column=2, padx=5)
+
+        tk.Label(col_frame, text="Y축 열 순서:").grid(
+            row=2, column=0, sticky="ne", padx=5
+        )
+        list_y = tk.Listbox(col_frame, height=6, selectmode=tk.SINGLE)
+        list_y.grid(row=2, column=1, padx=5, pady=5, sticky="nsew")
+        list_buttons = tk.Frame(col_frame)
+        list_buttons.grid(row=2, column=2, sticky="n")
+        tk.Button(
+            list_buttons,
+            text="▲",
+            width=3,
+            command=lambda: self.move_y_column(ext_name, -1),
+        ).pack(pady=2)
+        tk.Button(
+            list_buttons,
+            text="▼",
+            width=3,
+            command=lambda: self.move_y_column(ext_name, 1),
+        ).pack(pady=2)
+        tk.Button(
+            list_buttons,
+            text="삭제",
+            command=lambda: self.remove_y_column(ext_name),
+        ).pack(pady=2)
+
+        tk.Button(
+            frame,
+            text="선택 파일에 컬럼 설정 적용",
+            command=lambda: self.apply_file_settings(ext_name),
+            bg="#e6f7ff",
+        ).pack(pady=5, anchor="w")
 
         # 컨트롤 객체 반환
         return {
             "spin_row": spin_row,
             "combo_x": combo_x,
             "combo_y": combo_y,
+            "list_y": list_y,
         }
 
     # --- 이벤트 핸들러 ---
@@ -159,35 +195,39 @@ class MergeToolApp:
         tab_text = self.notebook.tab(selected_tab, "text").strip()
 
         target_ext = ".xy" if ".xy" in tab_text else ".out"
+        self.refresh_file_list(target_ext)
         self.load_preview_for_ext(target_ext)
+
+    def on_file_select(self, event):
+        target_ext = self.get_active_ext()
+        if not target_ext:
+            return
+        self.load_preview_for_ext(target_ext)
+        self.load_file_settings(target_ext)
 
     def load_preview_for_ext(self, ext):
         """특정 확장자의 파일을 찾아서 미리보기 창에 띄움"""
-        if not self.folder_list:
+        if not self.files_by_ext[ext]:
             self.txt_preview.config(state="normal")
             self.txt_preview.delete(1.0, tk.END)
-            self.txt_preview.insert(tk.END, "폴더를 먼저 추가해주세요.")
+            self.txt_preview.insert(tk.END, "파일을 먼저 추가해주세요.")
             self.txt_preview.config(state="disabled")
             return
 
-        base_folder = self.folder_list[0]
         try:
-            # 해당 확장자 파일 찾기
-            files = [f for f in os.listdir(base_folder) if f.lower().endswith(ext)]
-
+            file_path = self.get_selected_file(ext)
             self.txt_preview.config(state="normal")
             self.txt_preview.delete(1.0, tk.END)
 
-            if not files:
-                self.txt_preview.insert(
-                    tk.END, f"경고: 첫 번째 폴더에 {ext} 파일이 없습니다."
-                )
+            if not file_path:
+                self.txt_preview.insert(tk.END, f"경고: 선택된 {ext} 파일이 없습니다.")
                 self.lbl_preview_info.config(text=f"상태: {ext} 파일 없음")
             else:
-                target_file = os.path.join(base_folder, files[0])
-                self.lbl_preview_info.config(text=f"미리보기 파일: {files[0]} ({ext})")
+                self.lbl_preview_info.config(
+                    text=f"미리보기 파일: {os.path.basename(file_path)} ({ext})"
+                )
 
-                with open(target_file, "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     for i in range(20):
                         line = f.readline()
                         if not line:
@@ -199,28 +239,21 @@ class MergeToolApp:
         except Exception as e:
             self.lbl_preview_info.config(text=f"에러 발생: {e}")
 
-    def update_columns(self, ext, spin_widget, combo_x, combo_y):
+    def update_columns(self, ext):
         """현재 탭의 설정(Start Row)으로 해당 확장자 파일의 컬럼을 분석"""
-        if not self.folder_list:
-            messagebox.showwarning("경고", "폴더를 추가해주세요.")
+        selected_file = self.get_selected_file(ext)
+        if not selected_file:
+            messagebox.showwarning("경고", "파일을 선택해주세요.")
             return
-
-        base_folder = self.folder_list[0]
-        files = [f for f in os.listdir(base_folder) if f.lower().endswith(ext)]
-
-        if not files:
-            messagebox.showwarning("파일 없음", f"폴더에 {ext} 파일이 없습니다.")
-            return
-
         try:
+            spin_widget = self.get_controls(ext)["spin_row"]
             start_row_idx = int(spin_widget.get()) - 1
             if start_row_idx < 0:
                 start_row_idx = 0
 
-            file_path = os.path.join(base_folder, files[0])
             found_data = None
 
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(selected_file, "r", encoding="utf-8") as f:
                 for i, line in enumerate(f):
                     if i == start_row_idx:
                         found_data = line.strip().split()
@@ -228,14 +261,14 @@ class MergeToolApp:
 
             if found_data:
                 options = [f"Col {i} (값: {val})" for i, val in enumerate(found_data)]
-                combo_x["values"] = options
-                combo_y["values"] = options
+                controls = self.get_controls(ext)
+                controls["combo_x"]["values"] = options
+                controls["combo_y"]["values"] = options
                 if len(options) > 0:
-                    combo_x.current(0)
-                if len(options) > 1:
-                    combo_y.current(1)
-                else:
-                    combo_y.current(0)
+                    controls["combo_x"].current(0)
+                    controls["combo_y"].current(0)
+                controls["list_y"].delete(0, tk.END)
+                self.file_settings[ext].setdefault(selected_file, {})
                 messagebox.showinfo(
                     "성공",
                     f"[{ext}] 설정 갱신 완료!\n{start_row_idx + 1}번째 행 데이터를 불러왔습니다.",
@@ -248,43 +281,36 @@ class MergeToolApp:
         except Exception as e:
             messagebox.showerror("오류", str(e))
 
-    # --- 기존 폴더 함수들 ---
-    def add_folder(self):
-        d = filedialog.askdirectory()
-        if d and d not in self.folder_list:
-            self.folder_list.append(d)
-            self.listbox.insert(tk.END, d)
-            # 폴더 추가 즉시 현재 탭 미리보기 갱신
-            current_tab = self.notebook.index(self.notebook.select())  # 0 or 1
-            ext = ".xy" if current_tab == 0 else ".out"
-            self.load_preview_for_ext(ext)
-
-    def add_subfolders(self):
-        p = filedialog.askdirectory()
-        if p:
-            subs = [
-                os.path.join(p, f)
-                for f in os.listdir(p)
-                if os.path.isdir(os.path.join(p, f))
-            ]
-            subs.sort()
-            for s in subs:
-                if s not in self.folder_list:
-                    self.folder_list.append(s)
-                    self.listbox.insert(tk.END, s)
-            # 갱신
-            current_tab = self.notebook.index(self.notebook.select())
-            ext = ".xy" if current_tab == 0 else ".out"
+    # --- 파일 관리 함수들 ---
+    def add_files(self):
+        ext = self.get_active_ext()
+        if not ext:
+            return
+        files = filedialog.askopenfilenames(
+            filetypes=[(f"{ext} 파일", f"*{ext}"), ("모든 파일", "*.*")]
+        )
+        if files:
+            for file_path in files:
+                if file_path not in self.files_by_ext[ext]:
+                    self.files_by_ext[ext].append(file_path)
+            self.refresh_file_list(ext)
             self.load_preview_for_ext(ext)
 
     def delete_selected(self):
         sel = self.listbox.curselection()
         if sel:
-            del self.folder_list[sel[0]]
+            ext = self.get_active_ext()
+            if not ext:
+                return
+            del self.files_by_ext[ext][sel[0]]
             self.listbox.delete(sel[0])
+            self.load_preview_for_ext(ext)
 
     def clear_all(self):
-        self.folder_list = []
+        ext = self.get_active_ext()
+        if not ext:
+            return
+        self.files_by_ext[ext] = []
         self.listbox.delete(0, tk.END)
         self.txt_preview.config(state="normal")
         self.txt_preview.delete(1.0, tk.END)
@@ -299,29 +325,35 @@ class MergeToolApp:
         self.listbox.delete(idx)
         self.listbox.insert(idx - 1, text)
         self.listbox.selection_set(idx - 1)
-        self.folder_list[idx], self.folder_list[idx - 1] = (
-            self.folder_list[idx - 1],
-            self.folder_list[idx],
+        ext = self.get_active_ext()
+        if not ext:
+            return
+        self.files_by_ext[ext][idx], self.files_by_ext[ext][idx - 1] = (
+            self.files_by_ext[ext][idx - 1],
+            self.files_by_ext[ext][idx],
         )
 
     def move_down(self):
         sel = self.listbox.curselection()
-        if not sel or sel[0] == len(self.folder_list) - 1:
+        ext = self.get_active_ext()
+        if not ext:
+            return
+        if not sel or sel[0] == len(self.files_by_ext[ext]) - 1:
             return
         idx = sel[0]
         text = self.listbox.get(idx)
         self.listbox.delete(idx)
         self.listbox.insert(idx + 1, text)
         self.listbox.selection_set(idx + 1)
-        self.folder_list[idx], self.folder_list[idx + 1] = (
-            self.folder_list[idx + 1],
-            self.folder_list[idx],
+        self.files_by_ext[ext][idx], self.files_by_ext[ext][idx + 1] = (
+            self.files_by_ext[ext][idx + 1],
+            self.files_by_ext[ext][idx],
         )
 
     # --- 병합 실행 ---
     def run_merge(self):
-        if len(self.folder_list) < 2:
-            messagebox.showerror("오류", "최소 2개 이상의 폴더가 필요합니다.")
+        if len(self.files_by_ext[".xy"]) < 2:
+            messagebox.showerror("오류", "최소 2개 이상의 .xy 파일이 필요합니다.")
             return
 
         # 1. 각 탭의 설정값 읽어오기
@@ -331,89 +363,56 @@ class MergeToolApp:
         try:
             settings[".xy"] = {
                 "start_row": int(self.controls_xy["spin_row"].get()) - 1,
-                "x_idx": self.controls_xy["combo_x"].current(),
-                "y_idx": self.controls_xy["combo_y"].current(),
             }
             settings[".out"] = {
                 "start_row": int(self.controls_out["spin_row"].get()) - 1,
-                "x_idx": self.controls_out["combo_x"].current(),
-                "y_idx": self.controls_out["combo_y"].current(),
             }
         except ValueError:
             messagebox.showerror("오류", "행 번호 설정을 확인해주세요.")
             return
 
         # 2. 실행 준비
-        target_folders = self.folder_list
-        base_folder = target_folders[0]
-        parent_dir = os.path.dirname(base_folder)
+        base_file = self.files_by_ext[".xy"][0]
+        parent_dir = os.path.dirname(base_file)
         output_dir = os.path.join(parent_dir, "Merged_Output")
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        files = [f for f in os.listdir(base_folder) if f.lower().endswith((".xy", ".out"))]
         success_count = 0
         skipped_count = 0
 
-        # 3. 파일 처리
-        for filename in files:
-            ext = os.path.splitext(filename)[1].lower()
-
-            # 해당 확장자의 설정값 사용
-            if ext not in settings:
-                continue
-
-            conf = settings[ext]
-
-            # 컬럼 선택이 안 되어있으면 스킵
-            if conf["x_idx"] == -1 or conf["y_idx"] == -1:
-                skipped_count += 1
-                continue
-
-            combined_data = []
-
-            # (A) 기준 파일 읽기
-            try:
-                with open(os.path.join(base_folder, filename), "r", encoding="utf-8") as f:
-                    for i, line in enumerate(f):
-                        if i < conf["start_row"]:
-                            continue  # 지정한 행 이전은 스킵
-                        parts = line.strip().split()
-                        if len(parts) > max(conf["x_idx"], conf["y_idx"]):
-                            combined_data.append(
-                                [parts[conf["x_idx"]], parts[conf["y_idx"]]]
-                            )
-            except Exception:
-                continue
-
-            # (B) 나머지 폴더 읽기
-            for folder in target_folders[1:]:
-                target_path = os.path.join(folder, filename)
-                if os.path.exists(target_path):
-                    with open(target_path, "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                        # 데이터 영역만 추출
-                        data_lines = (
-                            lines[conf["start_row"] :] if len(lines) > conf["start_row"] else []
-                        )
-
-                        for i, line in enumerate(data_lines):
-                            parts = line.strip().split()
-                            if i < len(combined_data) and len(parts) > conf["y_idx"]:
-                                combined_data[i].append(parts[conf["y_idx"]])
-                            elif i < len(combined_data):
-                                combined_data[i].append("")
-                else:
-                    pass
-
-            # (C) 저장
-            with open(os.path.join(output_dir, filename), "w", encoding="utf-8") as f:
-                header = ["X-Axis"] + [os.path.basename(fd) for fd in target_folders]
+        # 3. 파일 처리 (.xy)
+        xy_output = os.path.join(output_dir, "merged_xy.tsv")
+        xy_settings = settings[".xy"]
+        combined_data, header = self.merge_files(
+            ".xy",
+            xy_settings["start_row"],
+        )
+        if combined_data:
+            with open(xy_output, "w", encoding="utf-8") as f:
                 f.write("\t".join(header) + "\n")
                 for row in combined_data:
                     f.write("\t".join(row) + "\n")
-
             success_count += 1
+        else:
+            skipped_count += 1
+
+        # 4. 파일 처리 (.out)
+        if self.files_by_ext[".out"]:
+            out_output = os.path.join(output_dir, "merged_out.tsv")
+            out_settings = settings[".out"]
+            combined_data, header = self.merge_files(
+                ".out",
+                out_settings["start_row"],
+            )
+            if combined_data:
+                with open(out_output, "w", encoding="utf-8") as f:
+                    f.write("\t".join(header) + "\n")
+                    for row in combined_data:
+                        f.write("\t".join(row) + "\n")
+                success_count += 1
+            else:
+                skipped_count += 1
 
         msg = f"작업 완료!\n\n- 성공: {success_count}개\n"
         if skipped_count > 0:
@@ -421,6 +420,149 @@ class MergeToolApp:
         msg += f"\n저장 폴더: {output_dir}"
 
         messagebox.showinfo("완료", msg)
+
+    def merge_files(self, ext, start_row):
+        files = self.files_by_ext[ext]
+        if not files:
+            return [], []
+
+        base_file = files[0]
+        base_settings = self.file_settings[ext].get(base_file, {})
+        x_idx = base_settings.get("x_idx")
+        if x_idx is None:
+            messagebox.showerror("오류", "첫 번째 파일의 X축 열을 설정해주세요.")
+            return [], []
+
+        base_rows = self.read_rows(base_file, start_row)
+        combined_data = []
+        for row in base_rows:
+            combined_data.append([row[x_idx] if x_idx < len(row) else ""])
+
+        header = ["X-Axis"]
+        for file_path in files:
+            file_settings = self.file_settings[ext].get(file_path, {})
+            y_cols = file_settings.get("y_cols", [])
+            if not y_cols:
+                messagebox.showwarning(
+                    "경고", f"{os.path.basename(file_path)}의 Y축 열을 설정해주세요."
+                )
+                return [], []
+            for col in y_cols:
+                header.append(f"{os.path.basename(file_path)}[Col {col}]")
+
+        for file_path in files:
+            file_settings = self.file_settings[ext].get(file_path, {})
+            y_cols = file_settings.get("y_cols", [])
+            rows = self.read_rows(file_path, start_row)
+            for row_idx, _ in enumerate(combined_data):
+                if row_idx >= len(rows):
+                    combined_data[row_idx].extend([""] * len(y_cols))
+                    continue
+                row = rows[row_idx]
+                for col in y_cols:
+                    combined_data[row_idx].append(row[col] if col < len(row) else "")
+
+        return combined_data, header
+
+    def read_rows(self, file_path, start_row):
+        rows = []
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if i < start_row:
+                        continue
+                    rows.append(line.strip().split())
+        except Exception:
+            return []
+        return rows
+
+    def add_y_column(self, ext):
+        controls = self.get_controls(ext)
+        selection = controls["combo_y"].current()
+        if selection == -1:
+            return
+        label = controls["combo_y"].get()
+        existing = controls["list_y"].get(0, tk.END)
+        if label not in existing:
+            controls["list_y"].insert(tk.END, label)
+
+    def remove_y_column(self, ext):
+        controls = self.get_controls(ext)
+        sel = controls["list_y"].curselection()
+        if sel:
+            controls["list_y"].delete(sel[0])
+
+    def move_y_column(self, ext, direction):
+        controls = self.get_controls(ext)
+        sel = controls["list_y"].curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= controls["list_y"].size():
+            return
+        text = controls["list_y"].get(idx)
+        controls["list_y"].delete(idx)
+        controls["list_y"].insert(new_idx, text)
+        controls["list_y"].selection_set(new_idx)
+
+    def apply_file_settings(self, ext):
+        file_path = self.get_selected_file(ext)
+        if not file_path:
+            messagebox.showwarning("경고", "파일을 선택해주세요.")
+            return
+        controls = self.get_controls(ext)
+        x_idx = controls["combo_x"].current()
+        if x_idx == -1:
+            messagebox.showwarning("경고", "X축 열을 선택해주세요.")
+            return
+        y_cols = []
+        for i in range(controls["list_y"].size()):
+            label = controls["list_y"].get(i)
+            if label.startswith("Col "):
+                try:
+                    idx_str = label.split()[1]
+                    y_cols.append(int(idx_str))
+                except (ValueError, IndexError):
+                    continue
+        if not y_cols:
+            messagebox.showwarning("경고", "Y축 병합 열을 추가해주세요.")
+            return
+        self.file_settings[ext][file_path] = {"x_idx": x_idx, "y_cols": y_cols}
+        messagebox.showinfo("저장", f"{os.path.basename(file_path)} 설정을 저장했습니다.")
+
+    def load_file_settings(self, ext):
+        file_path = self.get_selected_file(ext)
+        if not file_path:
+            return
+        controls = self.get_controls(ext)
+        settings = self.file_settings[ext].get(file_path, {})
+        if settings.get("x_idx") is not None and controls["combo_x"]["values"]:
+            controls["combo_x"].current(settings["x_idx"])
+        controls["list_y"].delete(0, tk.END)
+        for col in settings.get("y_cols", []):
+            controls["list_y"].insert(tk.END, f"Col {col}")
+
+    def refresh_file_list(self, ext):
+        self.listbox.delete(0, tk.END)
+        for file_path in self.files_by_ext[ext]:
+            self.listbox.insert(tk.END, file_path)
+
+    def get_active_ext(self):
+        selected_tab = self.notebook.select()
+        tab_text = self.notebook.tab(selected_tab, "text").strip()
+        return ".xy" if ".xy" in tab_text else ".out" if ".out" in tab_text else None
+
+    def get_selected_file(self, ext):
+        sel = self.listbox.curselection()
+        if not sel:
+            if self.files_by_ext[ext]:
+                return self.files_by_ext[ext][0]
+            return None
+        return self.files_by_ext[ext][sel[0]]
+
+    def get_controls(self, ext):
+        return self.controls_xy if ext == ".xy" else self.controls_out
 
 
 if __name__ == "__main__":
