@@ -16,7 +16,7 @@ class MergeToolApp:
         # --- 1. 파일 관리 영역 ---
         folder_frame = tk.LabelFrame(
             root,
-            text="1. 파일 목록 (맨 위 파일이 X축 기준)",
+            text="1. 파일 목록 (순서가 열 순서, 맨 위 파일이 X축 기준)",
             font=("맑은 고딕", 10, "bold"),
         )
         folder_frame.pack(pady=5, padx=10, fill=tk.X)
@@ -179,6 +179,13 @@ class MergeToolApp:
             command=lambda: self.apply_file_settings(ext_name),
             bg="#e6f7ff",
         ).pack(pady=5, anchor="w")
+        if ext_name == ".xy":
+            tk.Button(
+                frame,
+                text="모든 .xy 파일에 공통 설정 적용",
+                command=lambda: self.apply_common_settings(ext_name),
+                bg="#e6ffe6",
+            ).pack(pady=5, anchor="w")
 
         # 컨트롤 객체 반환
         return {
@@ -530,6 +537,31 @@ class MergeToolApp:
             return
         self.file_settings[ext][file_path] = {"x_idx": x_idx, "y_cols": y_cols}
         messagebox.showinfo("저장", f"{os.path.basename(file_path)} 설정을 저장했습니다.")
+
+    def apply_common_settings(self, ext):
+        if not self.files_by_ext[ext]:
+            messagebox.showwarning("경고", "파일을 먼저 추가해주세요.")
+            return
+        controls = self.get_controls(ext)
+        x_idx = controls["combo_x"].current()
+        if x_idx == -1:
+            messagebox.showwarning("경고", "X축 열을 선택해주세요.")
+            return
+        y_cols = []
+        for i in range(controls["list_y"].size()):
+            label = controls["list_y"].get(i)
+            if label.startswith("Col "):
+                try:
+                    idx_str = label.split()[1]
+                    y_cols.append(int(idx_str))
+                except (ValueError, IndexError):
+                    continue
+        if not y_cols:
+            messagebox.showwarning("경고", "Y축 병합 열을 추가해주세요.")
+            return
+        for file_path in self.files_by_ext[ext]:
+            self.file_settings[ext][file_path] = {"x_idx": x_idx, "y_cols": y_cols}
+        messagebox.showinfo("저장", f"{len(self.files_by_ext[ext])}개 파일에 공통 설정을 적용했습니다.")
 
     def load_file_settings(self, ext):
         file_path = self.get_selected_file(ext)
