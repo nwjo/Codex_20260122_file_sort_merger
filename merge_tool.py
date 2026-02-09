@@ -11,6 +11,8 @@ class MergeToolApp:
 
         self.files_by_ext = {".xy": [], ".out": []}
         self.file_settings = {".xy": {}, ".out": {}}
+        self.file_add_order = {".xy": {}, ".out": {}}
+        self.add_counter = {".xy": 0, ".out": 0}
         self.target_file = None
 
         # --- 1. 파일 관리 영역 ---
@@ -41,6 +43,9 @@ class MergeToolApp:
             side=tk.LEFT, padx=2
         )
         tk.Button(btn_frame, text="초기화", command=self.clear_all).pack(
+            side=tk.LEFT, padx=2
+        )
+        tk.Button(btn_frame, text="선택 순서 정렬", command=self.sort_by_selection).pack(
             side=tk.LEFT, padx=2
         )
 
@@ -297,10 +302,15 @@ class MergeToolApp:
             filetypes=[(f"{ext} 파일", f"*{ext}"), ("모든 파일", "*.*")]
         )
         if files:
-            for file_path in files:
+            ordered_files = self.confirm_file_order(list(files))
+            if not ordered_files:
+                return
+            for file_path in ordered_files:
                 if file_path not in self.files_by_ext[ext]:
                     self.files_by_ext[ext].append(file_path)
-            self.refresh_file_list(ext)
+                    self.file_add_order[ext][file_path] = self.add_counter[ext]
+                    self.add_counter[ext] += 1
+            self.sort_by_selection()
             self.load_preview_for_ext(ext)
 
     def delete_selected(self):
@@ -309,7 +319,9 @@ class MergeToolApp:
             ext = self.get_active_ext()
             if not ext:
                 return
+            file_path = self.files_by_ext[ext][sel[0]]
             del self.files_by_ext[ext][sel[0]]
+            self.file_add_order[ext].pop(file_path, None)
             self.listbox.delete(sel[0])
             self.load_preview_for_ext(ext)
 
@@ -318,6 +330,8 @@ class MergeToolApp:
         if not ext:
             return
         self.files_by_ext[ext] = []
+        self.file_add_order[ext] = {}
+        self.add_counter[ext] = 0
         self.listbox.delete(0, tk.END)
         self.txt_preview.config(state="normal")
         self.txt_preview.delete(1.0, tk.END)
@@ -356,6 +370,85 @@ class MergeToolApp:
             self.files_by_ext[ext][idx + 1],
             self.files_by_ext[ext][idx],
         )
+
+    def sort_by_selection(self):
+        ext = self.get_active_ext()
+        if not ext:
+            return
+        self.files_by_ext[ext].sort(
+            key=lambda path: self.file_add_order[ext].get(path, 0)
+        )
+        self.refresh_file_list(ext)
+
+    def confirm_file_order(self, files):
+        if len(files) <= 1:
+            return files
+
+        order_window = tk.Toplevel(self.root)
+        order_window.title("파일 순서 확인")
+        order_window.geometry("600x400")
+        order_window.transient(self.root)
+        order_window.grab_set()
+
+        tk.Label(
+            order_window,
+            text="파일 선택 순서가 보장되지 않을 수 있습니다.\n"
+            "아래 목록에서 순서를 확인/조정 후 확인을 눌러주세요.",
+            justify="left",
+        ).pack(anchor="w", padx=10, pady=10)
+
+        list_frame = tk.Frame(order_window)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        listbox = tk.Listbox(list_frame, selectmode=tk.SINGLE)
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        for file_path in files:
+            listbox.insert(tk.END, file_path)
+
+        btn_frame = tk.Frame(list_frame)
+        btn_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5)
+
+        def move_item(direction):
+            sel = listbox.curselection()
+            if not sel:
+                return
+            idx = sel[0]
+            new_idx = idx + direction
+            if new_idx < 0 or new_idx >= listbox.size():
+                return
+            text = listbox.get(idx)
+            listbox.delete(idx)
+            listbox.insert(new_idx, text)
+            listbox.selection_set(new_idx)
+
+        tk.Button(btn_frame, text="▲", width=3, command=lambda: move_item(-1)).pack(
+            pady=2
+        )
+        tk.Button(btn_frame, text="▼", width=3, command=lambda: move_item(1)).pack(
+            pady=2
+        )
+
+        result = {"files": None}
+
+        def on_confirm():
+            result["files"] = list(listbox.get(0, tk.END))
+            order_window.destroy()
+
+        def on_cancel():
+            result["files"] = []
+            order_window.destroy()
+
+        action_frame = tk.Frame(order_window)
+        action_frame.pack(fill=tk.X, padx=10, pady=10)
+        tk.Button(action_frame, text="확인", command=on_confirm).pack(
+            side=tk.RIGHT, padx=5
+        )
+        tk.Button(action_frame, text="취소", command=on_cancel).pack(
+            side=tk.RIGHT, padx=5
+        )
+
+        self.root.wait_window(order_window)
+        return result["files"] if result["files"] is not None else []
 
     # --- 병합 실행 ---
     def run_merge(self):
